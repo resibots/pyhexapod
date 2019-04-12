@@ -1,5 +1,5 @@
 from simulator import *
-from py_map_elites.map_elites import *
+from pymap_elites.map_elites import *
 p1 = \
 	    {
 	        "cvt_samples": 400000,
