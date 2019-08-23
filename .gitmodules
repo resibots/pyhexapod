@@ -1,0 +1,6 @@
+[submodule "pymap_elites"]
+	path = pymap_elites
+	url = https://github.com/resibots/pymap_elites.git
+[submodule "pycontrollers"]
+	path = pycontrollers
+	url = https://github.com/resibots/pycontrollers.git
