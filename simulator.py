@@ -5,7 +5,7 @@ import time
 import math
 from timeit import default_timer as timer
 import time
-from controller import Controller
+from .controller import Controller
 
 # from pylab import *
 # def plot_control(hexapod_controller):
