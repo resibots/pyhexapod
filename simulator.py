@@ -69,7 +69,6 @@ class HexapodSimulator:
 		else:
 			self.physicsClient = p.connect(p.DIRECT)
 
-
 		p.setAdditionalSearchPath(pybullet_data.getDataPath())
 		p.resetSimulation()
 		p.setGravity(0,0,self.GRAVITY)
@@ -97,6 +96,13 @@ class HexapodSimulator:
 			p.stepSimulation()
 			p.setGravity(0,0, self.GRAVITY)
 		self._init_state = p.saveState()
+
+	def __del__(self):
+		try:
+			p.disconnect(physicsClientId=self.physicsClient)
+		except p.error as e:
+			print("Warning:", e)
+
 
 	def reset(self):
 		assert(0), "not working for now"
@@ -143,12 +149,12 @@ class HexapodSimulator:
 			i += 1
 
 		#### DESCRIPTOR DUTY CYCLE HEXAPOD  ###################################
-		#Get contact points between minitaur and world plane
+		#Get contact points between robot and world plane
 		contact_points = p.getContactPoints(self.botId,self.planeId)
 		link_ids = [] #list of links in contact with the ground plane
 		if(len(contact_points)>0):
 			for cn in contact_points:
-				linkid= cn[3] #minitaur link id in contact with world plane
+				linkid= cn[3] #robot link id in contact with world plane
 				if linkid not in link_ids:
 					link_ids.append(linkid)
 		# num_leg_on_ground = 0
