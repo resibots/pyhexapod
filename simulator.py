@@ -36,6 +36,7 @@
 #| The fact that you are presently reading this means that you have
 #| had knowledge of the CeCILL license and that you accept its terms.
 import pybullet as p
+import pybullet_utils.bullet_client as bc
 import pybullet_data
 import os
 import time
@@ -65,67 +66,69 @@ class HexapodSimulator:
 		self.safety_turnover = True
 
 		if gui:
-			self.physicsClient = p.connect(p.GUI)
+			self.physics = bc.BulletClient(connection_mode=p.GUI)
 		else:
-			self.physicsClient = p.connect(p.DIRECT)
-
-		p.setAdditionalSearchPath(pybullet_data.getDataPath())
-		p.resetSimulation()
-		p.setGravity(0,0,self.GRAVITY)
-		p.setTimeStep(self.dt)
-		self.planeId = p.loadURDF("plane.urdf")
+			self.physics = bc.BulletClient(connection_mode=p.DIRECT)
+		self.physics.setAdditionalSearchPath(pybullet_data.getDataPath())
+		self.physics.resetSimulation()
+		self.physics.setGravity(0,0,self.GRAVITY)
+		self.physics.setTimeStep(self.dt)
+		self.physics.setPhysicsEngineParameter(fixedTimeStep=self.dt,
+                            				   solverResidualThreshold=1 - 10,
+                         					   numSolverIterations=50,
+                         					   numSubSteps=4)
+		self.planeId = self.physics.loadURDF("plane.urdf")
 		start_pos = [0,0,0.15]
-		start_orientation = p.getQuaternionFromEuler([0.,0,0])
+		start_orientation = self.physics.getQuaternionFromEuler([0.,0,0])
 
 		if(damage):
 			urdf=(os.path.dirname(os.path.abspath(__file__))+'/urdf/pexod_damaged.urdf')
-		self.botId = p.loadURDF(urdf, start_pos, start_orientation)
+		self.botId = self.physics.loadURDF(urdf, start_pos, start_orientation)
 		self.joint_list = self._make_joint_list(self.botId)
 
 		# #bullet links number corresponding to the legs
 		self.leg_link_ids = [17, 14, 2, 5, 8, 11]
 		self.descriptor = {17 : [], 14 : [],2 : [],5 : [],8 : [],11 : []}
 
-		p.setRealTimeSimulation(0)
+		self.physics.setRealTimeSimulation(0)
 		jointFrictionForce=1
-		for joint in range (p.getNumJoints(self.botId)):
-			p.setJointMotorControl2(self.botId, joint,
+		for joint in range (self.physics.getNumJoints(self.botId)):
+			self.physics.setJointMotorControl2(self.botId, joint,
 				p.POSITION_CONTROL,
 				force=jointFrictionForce)
 		for t in range(0, 100):
-			p.stepSimulation()
-			p.setGravity(0,0, self.GRAVITY)
-		self._init_state = p.saveState()
+			self.physics.stepSimulation()
+			self.physics.setGravity(0,0, self.GRAVITY)
+		#self._init_state = self.physics.saveState()
+
 
 	def __del__(self):
 		try:
-			p.disconnect(physicsClientId=self.physicsClient)
+			self.physics.disconnect()
 		except p.error as e:
-			print("Warning:", e)
+			print("Warning (destructor of simulator):", e)
 
 
 	def reset(self):
 		assert(0), "not working for now"
 		self.t = 0
-		#p.resetSimulation()
-		p.restoreState(self._init_state)
-		for joint in self.joint_list:
-			if(joint!=1000):
-				p.resetJointState(self.botId, joint, 0)
+		self.physics.resetSimulation()
+#		self.physics.restoreState(self._init_state)
+		
 
 	def get_pos(self):
 		'''
 		Returns the position list of 3 floats and orientation as list of 4 floats in [x,y,z,w] order.
 		Use p.getEulerFromQuaternion to convert the quaternion to Euler if needed.
 		'''
-		return p.getBasePositionAndOrientation(self.botId)
+		return self.physics.getBasePositionAndOrientation(self.botId)
 
 	def step(self, controller):
 		angles = controller.step(self.t)
 		i = 0
 		error = False
 		#Check if roll pitch are not too high
-		self.euler = p.getEulerFromQuaternion(self.get_pos()[1])
+		self.euler = self.physics.getEulerFromQuaternion(self.get_pos()[1])
 		if(self.safety_turnover):
 			if((abs(self.euler[1]) >= math.pi/2) or (abs(self.euler[0]) >= math.pi/2)):
 				error = True
@@ -135,13 +138,13 @@ class HexapodSimulator:
 			if(joint==1000):
 				missing_joint_count += 1
 			else:
-				info = p.getJointInfo(self.botId, joint)
+				info = self.physics.getJointInfo(self.botId, joint)
 				lower_limit = info[8]
 				upper_limit = info[9]
 				max_force = info[10]
 				max_velocity = info[11]
 				pos = min(max(lower_limit, angles[i]), upper_limit)
-				p.setJointMotorControl2(self.botId, joint,
+				self.physics.setJointMotorControl2(self.botId, joint,
 					p.POSITION_CONTROL,
 					targetPosition=pos,
 					force=max_force,
@@ -150,7 +153,7 @@ class HexapodSimulator:
 
 		#### DESCRIPTOR DUTY CYCLE HEXAPOD  ###################################
 		#Get contact points between robot and world plane
-		contact_points = p.getContactPoints(self.botId,self.planeId)
+		contact_points = self.physics.getContactPoints(self.botId,self.planeId)
 		link_ids = [] #list of links in contact with the ground plane
 		if(len(contact_points)>0):
 			for cn in contact_points:
@@ -168,8 +171,8 @@ class HexapodSimulator:
 			self.descriptor[l] = cns
 
 
-		p.setGravity(0,0,self.GRAVITY)
-		p.stepSimulation()
+		self.physics.setGravity(0,0,self.GRAVITY)
+		self.physics.stepSimulation()
 		self.t += self.control_dt
 		self.reward = -self.get_pos()[0][0]
 		return error
@@ -185,8 +188,8 @@ class HexapodSimulator:
 		joint_list = []
 		for n in joint_names:
 			joint_found = False
-			for joint in range (p.getNumJoints(botId)):
-				name = p.getJointInfo(botId, joint)[1]
+			for joint in range (self.physics.getNumJoints(botId)):
+				name = self.physics.getJointInfo(botId, joint)[1]
 				if name == n:
 					joint_list += [joint]
 					joint_found = True
@@ -195,7 +198,7 @@ class HexapodSimulator:
 		return joint_list
 
 	def destroyed(self):
-		p.disconnect()
+		self.physics.disconnect()
 
 def eval_hexapod(ctrl,gui_eval = False,damage = False):
 	simu = HexapodSimulator(gui=gui_eval,damage=damage)
@@ -215,14 +218,14 @@ def eval_hexapod(ctrl,gui_eval = False,damage = False):
 
 if __name__ == "__main__":
 	ctrl = [1, 0, 0.5, 0.25, 0.25, 0.5, 1, 0.5, 0.5, 0.25, 0.75, 0.5, 1, 0, 0.5, 0.25, 0.25, 0.5, 1, 0, 0.5, 0.25, 0.75, 0.5, 1, 0.5, 0.5, 0.25, 0.25, 0.5, 1, 0, 0.5, 0.25, 0.75, 0.5]
-	# for k in range(0, 10):
-	# 	t0 = time.perf_counter()
-	# 	simu = HexapodSimulator(gui=False)
-	# 	controller = Controller(ctrl,minitaur=False)
-	# 	for i in range(0, 3000):
-	# 		simu.step(controller)
-	# 	print(time.perf_counter() - t0, " ms", simu.get_pos()[0])
-	# 	simu.destroyed()
-	reward, desc = eval_hexapod(ctrl,True)
-	print("Final reward : ", reward)
-	print("Associated desc : ", desc)
+	for k in range(0, 10):
+		t0 = time.perf_counter()
+		simu = HexapodSimulator(dt=0.01,gui=False)
+		controller = Controller(ctrl,minitaur=False)
+		for i in range(0, int(3./simu.dt)):
+			simu.step(controller)
+		print(time.perf_counter() - t0, " ms", simu.get_pos()[0])
+		#\simu.destroyed()
+	# reward, desc = eval_hexapod(ctrl,True)
+	# print("Final reward : ", reward)
+	# print("Associated desc : ", desc)
