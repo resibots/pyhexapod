@@ -102,7 +102,7 @@ class HexapodSimulator:
 		#self._init_state = self.physics.saveState()
 
 
-	def __del__(self):
+	def destroy(self):
 		try:
 			self.physics.disconnect()
 		except p.error as e:
@@ -197,8 +197,6 @@ class HexapodSimulator:
 				joint_list += [1000] #if the joint is not here (aka broken leg case) put 1000
 		return joint_list
 
-	def destroyed(self):
-		self.physics.disconnect()
 
 def eval_hexapod(ctrl,gui_eval = False,damage = False):
 	simu = HexapodSimulator(gui=gui_eval,damage=damage)
@@ -225,7 +223,7 @@ if __name__ == "__main__":
 		for i in range(0, int(3./simu.dt)):
 			simu.step(controller)
 		print(time.perf_counter() - t0, " ms", simu.get_pos()[0])
-		#\simu.destroyed()
+		simu.destroy()
 	# reward, desc = eval_hexapod(ctrl,True)
 	# print("Final reward : ", reward)
 	# print("Associated desc : ", desc)
