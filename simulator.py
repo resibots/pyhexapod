@@ -67,6 +67,14 @@ class HexapodSimulator:
 
 		if gui:
 			self.physics = bc.BulletClient(connection_mode=p.GUI)
+			p.configureDebugVisualizer(p.COV_ENABLE_GUI,0)
+			p.configureDebugVisualizer(p.COV_ENABLE_SEGMENTATION_MARK_PREVIEW, 0)
+			p.configureDebugVisualizer(p.COV_ENABLE_DEPTH_BUFFER_PREVIEW, 0)
+			p.configureDebugVisualizer(p.COV_ENABLE_RGB_BUFFER_PREVIEW, 0)
+			p.resetDebugVisualizerCamera(cameraDistance=1,
+                            			cameraYaw=20,
+                             			cameraPitch=-20,
+                            			cameraTargetPosition=[1, -0.5, 0.8])
 		else:
 			self.physics = bc.BulletClient(connection_mode=p.DIRECT)
 		self.physics.setAdditionalSearchPath(pybullet_data.getDataPath())
@@ -176,6 +184,15 @@ class HexapodSimulator:
 		self.t += self.control_dt
 		self.reward = -self.get_pos()[0][0]
 		return error
+
+	def get_joints_positions(self):
+		''' return the actual position in the physics engine'''
+		p = np.zeros(len(self.joint_list))
+		for i in range(0, p.shape[0]):
+			p[i] = self.physics.getJointState(self.botId, i)[0]
+		return p
+
+
 
 	def _make_joint_list(self, botId):
 		joint_names = [b'body_leg_0', b'leg_0_1_2', b'leg_0_2_3',
