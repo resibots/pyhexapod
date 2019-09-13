@@ -64,8 +64,8 @@ class HexapodSimulator:
 		# kp*(erp*(desiredPosition-currentPosition)/dt)+currentVelocity+kd*(m_desiredVelocity - currentVelocity).
 		# here we set kp to be likely to reach the target position
 		# in the time between two calls of the controller
-		self.kp = 1.* dt * self.control_period
-		self.kd = 1.
+		self.kp = 1./12.# * self.control_period
+		self.kd = 0.4
 		# the desired position for the joints
 		self.angles = np.zeros(18)
 		# setup the GUI (disable the useless windows)
@@ -136,6 +136,7 @@ class HexapodSimulator:
 	def step(self, controller):
 		if self.i % self.control_period == 0:
 			self.angles = controller.step(self)
+		print(self.get_joints_positions())
 		self.i += 1
 		
 		#Check if roll pitch are not too high
