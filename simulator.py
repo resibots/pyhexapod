@@ -56,7 +56,7 @@ class HexapodSimulator:
 		self.dt = dt
 		self.control_dt = control_dt
 		# we call the controller every control_period steps
-		self.control_period = control_dt / dt
+		self.control_period = int(control_dt / dt)
 		self.t = 0
 		self.i = 0
 		self.safety_turnover = True
