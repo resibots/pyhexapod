@@ -136,7 +136,6 @@ class HexapodSimulator:
 	def step(self, controller):
 		if self.i % self.control_period == 0:
 			self.angles = controller.step(self)
-		print(self.get_joints_positions())
 		self.i += 1
 		
 		#Check if roll pitch are not too high
