@@ -44,60 +44,63 @@ import math
 from timeit import default_timer as timer
 import time
 import numpy as np
-from pycontrollers.controller import Controller
-
-# from pylab import *
-# def plot_control(hexapod_controller):
-#     fig = figure()
-#     ax = fig.add_subplot(111)
-#     leg1 = hexapod_controller._control_signal(1, 0.5, 0.5)
-#     ax.plot(np.arange(0, 100), leg1)
-#     leg1 = hexapod_controller._control_signal(0.5, 0, 0.5)
-#     ax.plot(np.arange(0, 100), leg1)
-#     fig.savefig('legs.pdf')
+from pycontrollers.hexapod_controller import HexapodController
 
 class HexapodSimulator:
-	def __init__(self, gui=False, urdf=(os.path.dirname(os.path.abspath(__file__))+'/urdf/pexod.urdf'), dt = 1e-3, control_dt=0.001,damage = False):
-		self.GRAVITY = -9.8
+	def __init__(self, gui=False, 
+				urdf=(os.path.dirname(os.path.abspath(__file__))+'/urdf/pexod.urdf'), 
+				dt = 1./240.,  # the default for pybullet (see doc)
+				control_dt=0.05, 
+				damage = False):
+		self.GRAVITY = -9.81
 		self.dt = dt
 		self.control_dt = control_dt
+		# we call the controller every control_period steps
+		self.control_period = int(control_dt / dt)
 		self.t = 0
-		self.reward = 0
+		self.i = 0
 		self.safety_turnover = True
-
+		# the final target velocity is computed using:
+		# kp*(erp*(desiredPosition-currentPosition)/dt)+currentVelocity+kd*(m_desiredVelocity - currentVelocity).
+		# here we set kp to be likely to reach the target position
+		# in the time between two calls of the controller
+		self.kp = 1./12.# * self.control_period
+		self.kd = 0.4
+		# the desired position for the joints
+		self.angles = np.zeros(18)
+		# setup the GUI (disable the useless windows)
 		if gui:
 			self.physics = bc.BulletClient(connection_mode=p.GUI)
-			p.configureDebugVisualizer(p.COV_ENABLE_GUI,0)
-			p.configureDebugVisualizer(p.COV_ENABLE_SEGMENTATION_MARK_PREVIEW, 0)
-			p.configureDebugVisualizer(p.COV_ENABLE_DEPTH_BUFFER_PREVIEW, 0)
-			p.configureDebugVisualizer(p.COV_ENABLE_RGB_BUFFER_PREVIEW, 0)
-			p.resetDebugVisualizerCamera(cameraDistance=1,
-                            			cameraYaw=20,
-                             			cameraPitch=-20,
-                            			cameraTargetPosition=[1, -0.5, 0.8])
+			self.physics.configureDebugVisualizer(p.COV_ENABLE_GUI,0)
+			self.physics.configureDebugVisualizer(p.COV_ENABLE_SEGMENTATION_MARK_PREVIEW, 0)
+			self.physics.configureDebugVisualizer(p.COV_ENABLE_DEPTH_BUFFER_PREVIEW, 0)
+			self.physics.configureDebugVisualizer(p.COV_ENABLE_RGB_BUFFER_PREVIEW, 0)
+			self.physics.resetDebugVisualizerCamera(cameraDistance=1,
+                            						cameraYaw=20,
+			                             			cameraPitch=-20,
+            			                			cameraTargetPosition=[1, -0.5, 0.8])
 		else:
 			self.physics = bc.BulletClient(connection_mode=p.DIRECT)
+
 		self.physics.setAdditionalSearchPath(pybullet_data.getDataPath())
 		self.physics.resetSimulation()
 		self.physics.setGravity(0,0,self.GRAVITY)
 		self.physics.setTimeStep(self.dt)
-		self.physics.setPhysicsEngineParameter(fixedTimeStep=self.dt,
-                            				   solverResidualThreshold=1 - 10,
-                         					   numSolverIterations=50,
-                         					   numSubSteps=4)
+		self.physics.setPhysicsEngineParameter(fixedTimeStep=self.dt)
 		self.planeId = self.physics.loadURDF("plane.urdf")
+
 		start_pos = [0,0,0.15]
 		start_orientation = self.physics.getQuaternionFromEuler([0.,0,0])
-
 		if(damage):
 			urdf=(os.path.dirname(os.path.abspath(__file__))+'/urdf/pexod_damaged.urdf')
 		self.botId = self.physics.loadURDF(urdf, start_pos, start_orientation)
 		self.joint_list = self._make_joint_list(self.botId)
 
-		# #bullet links number corresponding to the legs
+		# bullet links number corresponding to the legs
 		self.leg_link_ids = [17, 14, 2, 5, 8, 11]
-		self.descriptor = {17 : [], 14 : [],2 : [],5 : [],8 : [],11 : []}
+		self.descriptor = {17 : [], 14 : [], 2 : [], 5 : [], 8 : [], 11 : []}
 
+		# put the hexapod on the ground (gently)
 		self.physics.setRealTimeSimulation(0)
 		jointFrictionForce=1
 		for joint in range (self.physics.getNumJoints(self.botId)):
@@ -107,7 +110,6 @@ class HexapodSimulator:
 		for t in range(0, 100):
 			self.physics.stepSimulation()
 			self.physics.setGravity(0,0, self.GRAVITY)
-		#self._init_state = self.physics.saveState()
 
 
 	def destroy(self):
@@ -132,16 +134,21 @@ class HexapodSimulator:
 		return self.physics.getBasePositionAndOrientation(self.botId)
 
 	def step(self, controller):
-		angles = controller.step(self.t)
-		i = 0
-		error = False
+		if self.i % self.control_period == 0:
+			self.angles = controller.step(self)
+		print(self.get_joints_positions())
+		self.i += 1
+		
 		#Check if roll pitch are not too high
+		error = False
 		self.euler = self.physics.getEulerFromQuaternion(self.get_pos()[1])
 		if(self.safety_turnover):
 			if((abs(self.euler[1]) >= math.pi/2) or (abs(self.euler[0]) >= math.pi/2)):
 				error = True
 
+		# move the joints
 		missing_joint_count = 0
+		j = 0
 		for joint in self.joint_list:
 			if(joint==1000):
 				missing_joint_count += 1
@@ -151,45 +158,49 @@ class HexapodSimulator:
 				upper_limit = info[9]
 				max_force = info[10]
 				max_velocity = info[11]
-				pos = min(max(lower_limit, angles[i]), upper_limit)
+				pos = min(max(lower_limit, self.angles[j]), upper_limit)
 				self.physics.setJointMotorControl2(self.botId, joint,
 					p.POSITION_CONTROL,
+					positionGain=self.kp,
+					velocityGain=self.kd,
 					targetPosition=pos,
 					force=max_force,
 					maxVelocity=max_velocity)
-			i += 1
+			j += 1
 
-		#### DESCRIPTOR DUTY CYCLE HEXAPOD  ###################################
 		#Get contact points between robot and world plane
 		contact_points = self.physics.getContactPoints(self.botId,self.planeId)
 		link_ids = [] #list of links in contact with the ground plane
-		if(len(contact_points)>0):
+		if(len(contact_points) > 0):
 			for cn in contact_points:
 				linkid= cn[3] #robot link id in contact with world plane
 				if linkid not in link_ids:
 					link_ids.append(linkid)
-		# num_leg_on_ground = 0
 		for l in self.leg_link_ids:
 			cns = self.descriptor[l]
 			if l in link_ids:
-				# num_leg_on_ground=num_leg_on_ground+1
 				cns.append(1)
 			else:
 				cns.append(0)
 			self.descriptor[l] = cns
 
+		# don't forget to add the gravity force!
+		self.physics.setGravity(0, 0, self.GRAVITY)
 
-		self.physics.setGravity(0,0,self.GRAVITY)
+		# finally, step the simulation
 		self.physics.stepSimulation()
-		self.t += self.control_dt
-		self.reward = -self.get_pos()[0][0]
+		self.t += self.dt
 		return error
 
 	def get_joints_positions(self):
 		''' return the actual position in the physics engine'''
 		p = np.zeros(len(self.joint_list))
-		for i in range(0, p.shape[0]):
-			p[i] = self.physics.getJointState(self.botId, i)[0]
+		i = 0
+		# be careful that the joint_list is not necessarily in the same order as 
+		# in bullet (see make_joint_list)
+		for joint in self.joint_list:
+			p[i] = self.physics.getJointState(self.botId, joint)[0]
+			i += 1
 		return p
 
 
@@ -215,32 +226,21 @@ class HexapodSimulator:
 		return joint_list
 
 
-def eval_hexapod(ctrl,gui_eval = False,damage = False):
-	simu = HexapodSimulator(gui=gui_eval,damage=damage)
-	controller = Controller(ctrl,minitaur=False)
-	for i in range(0,5000):
+# for an unkwnon reason, connect/disconnect works only if this is a function
+def test_ref_controller():
+	# this the reference controller from Cully et al., 2015 (Nature)
+	ctrl = [1, 0, 0.5, 0.25, 0.25, 0.5, 1, 0.5, 0.5, 0.25, 0.75, 0.5, 1, 0, 0.5, 0.25, 0.25, 0.5, 1, 0, 0.5, 0.25, 0.75, 0.5, 1, 0.5, 0.5, 0.25, 0.25, 0.5, 1, 0, 0.5, 0.25, 0.75, 0.5]
+	simu = HexapodSimulator(gui=False)
+	controller = HexapodController(ctrl)
+	for i in range(0, int(3./simu.dt)): # seconds
 		simu.step(controller)
-	keys = list(simu.descriptor.keys())
-	desc=[]
-	for k in keys:
-		cns = simu.descriptor[k]
-		d = round(sum(cns)/len(cns)*100.0)/100.0
-		desc.append(d)
-	reward = simu.reward
-	simu.destroyed()
-	return reward, np.array(desc)
-
+	print("=>", simu.get_pos()[0])
+	simu.destroy()
 
 if __name__ == "__main__":
-	ctrl = [1, 0, 0.5, 0.25, 0.25, 0.5, 1, 0.5, 0.5, 0.25, 0.75, 0.5, 1, 0, 0.5, 0.25, 0.25, 0.5, 1, 0, 0.5, 0.25, 0.75, 0.5, 1, 0.5, 0.5, 0.25, 0.25, 0.5, 1, 0, 0.5, 0.25, 0.75, 0.5]
+	# we do 10 simulations to get some statistics (perfs, reproducibility)
 	for k in range(0, 10):
 		t0 = time.perf_counter()
-		simu = HexapodSimulator(dt=0.01,gui=False)
-		controller = Controller(ctrl,minitaur=False)
-		for i in range(0, int(3./simu.dt)):
-			simu.step(controller)
-		print(time.perf_counter() - t0, " ms", simu.get_pos()[0])
-		simu.destroy()
-	# reward, desc = eval_hexapod(ctrl,True)
-	# print("Final reward : ", reward)
-	# print("Associated desc : ", desc)
+		test_ref_controller()# this needs to be in a sub-function...
+		print(time.perf_counter() - t0, " ms")
+	
