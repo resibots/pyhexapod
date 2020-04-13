@@ -35,23 +35,25 @@
 #|
 #| The fact that you are presently reading this means that you have
 #| had knowledge of the CeCILL license and that you accept its terms.
-import pybullet as p
-import pybullet_utils.bullet_client as bc
-import pybullet_data
 import os
 import time
 import math
 from timeit import default_timer as timer
+import subprocess 
 import time
 import numpy as np
+import pybullet as p
+import pybullet_utils.bullet_client as bc
+import pybullet_data
+
 from pycontrollers.hexapod_controller import HexapodController
 
 class HexapodSimulator:
 	def __init__(self, gui=False, 
 				urdf=(os.path.dirname(os.path.abspath(__file__))+'/urdf/pexod.urdf'), 
 				dt = 1./240.,  # the default for pybullet (see doc)
-				control_dt=0.05, 
-				damage = False):
+				control_dt=0.05,
+				video=''):
 		self.GRAVITY = -9.81
 		self.dt = dt
 		self.control_dt = control_dt
@@ -60,6 +62,8 @@ class HexapodSimulator:
 		self.t = 0
 		self.i = 0
 		self.safety_turnover = True
+		self.video_output_file = video
+
 		# the final target velocity is computed using:
 		# kp*(erp*(desiredPosition-currentPosition)/dt)+currentVelocity+kd*(m_desiredVelocity - currentVelocity).
 		# here we set kp to be likely to reach the target position
@@ -91,14 +95,16 @@ class HexapodSimulator:
 
 		start_pos = [0,0,0.15]
 		start_orientation = self.physics.getQuaternionFromEuler([0.,0,0])
-		if(damage):
-			urdf=(os.path.dirname(os.path.abspath(__file__))+'/urdf/pexod_damaged.urdf')
 		self.botId = self.physics.loadURDF(urdf, start_pos, start_orientation)
 		self.joint_list = self._make_joint_list(self.botId)
 
 		# bullet links number corresponding to the legs
 		self.leg_link_ids = [17, 14, 2, 5, 8, 11]
 		self.descriptor = {17 : [], 14 : [], 2 : [], 5 : [], 8 : [], 11 : []}
+
+		# video makes things much slower
+		if (video != ''):
+			self._stream_to_ffmpeg(self.video_output_file)
 
 		# put the hexapod on the ground (gently)
 		self.physics.setRealTimeSimulation(0)
@@ -115,6 +121,10 @@ class HexapodSimulator:
 	def destroy(self):
 		try:
 			self.physics.disconnect()
+			if self.video_output_file != '':
+				self.ffmpeg_pipe.stdin.close()
+				self.ffmpeg_pipe.stderr.close()
+				self.ffmpeg_pipe.wait()
 		except p.error as e:
 			print("Warning (destructor of simulator):", e)
 
@@ -138,6 +148,12 @@ class HexapodSimulator:
 			self.angles = controller.step(self)
 		self.i += 1
 		
+		# 24 FPS dt =1/240 : every 10 frames
+		if self.video_output_file != '' and self.i % (int(1. / (self.dt * 24))) == 0: 
+			camera = self.physics.getDebugVisualizerCamera()
+			img = p.getCameraImage(camera[0], camera[1], renderer=p.ER_BULLET_HARDWARE_OPENGL)
+			self.ffmpeg_pipe.stdin.write(img[2].tobytes())
+
 		#Check if roll pitch are not too high
 		error = False
 		self.euler = self.physics.getEulerFromQuaternion(self.get_pos()[1])
@@ -203,6 +219,22 @@ class HexapodSimulator:
 		return p
 
 
+	def _stream_to_ffmpeg(self, fname):
+		camera = self.physics.getDebugVisualizerCamera()
+		command = ['ffmpeg',
+                '-y',
+                '-f', 'rawvideo',
+                '-vcodec','rawvideo',
+                '-s',  '{}x{}'.format(camera[0], camera[1]),
+                '-pix_fmt', 'rgba',
+                '-r', str(24),
+                '-i', '-',
+                '-an',
+                '-vcodec', 'mpeg4',
+				'-vb', '20M',
+                fname]
+		print(command)
+		self.ffmpeg_pipe = subprocess.Popen(command, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
 
 	def _make_joint_list(self, botId):
 		joint_names = [b'body_leg_0', b'leg_0_1_2', b'leg_0_2_3',
